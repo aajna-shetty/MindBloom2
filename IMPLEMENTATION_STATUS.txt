@@ -1,0 +1,721 @@
+MINDBLOOM IMPLEMENTATION STATUS
+================================
+
+This document summarizes what has been implemented in the MindBloom project so far,
+what is currently usable, and what remains incomplete.
+
+
+1. PROJECT OVERVIEW
+-------------------
+
+MindBloom is a work-in-progress FastAPI service for early autism-risk screening.
+It combines:
+
+1. Questionnaire-based machine learning.
+2. Child-profile and screening-result persistence.
+3. Cognitive-game progress tracking.
+4. An experimental computer-vision video-analysis pipeline using OpenCV,
+   MediaPipe, and DeepFace.
+
+MindBloom is not a diagnostic tool. It is an experimental screening aid and still
+requires additional clinical validation, usability work, privacy controls, and
+production hardening before real-world use.
+
+
+2. QUESTIONNAIRE-BASED SCREENING
+--------------------------------
+
+The questionnaire screening pipeline is implemented and includes:
+
+- Ten AQ-style behavioral questions.
+- Child age and gender information.
+- Family history and jaundice history.
+- Prenatal and perinatal risk factors.
+- Developmental milestones.
+- Social-communication difficulty.
+- Repetitive-behavior severity.
+- Sensory sensitivities.
+- Co-occurring conditions such as ADHD, epilepsy, intellectual disability,
+  language disorder, and motor delay.
+
+The questionnaire answers are converted into a fixed 32-feature vector. The
+feature order is defined centrally so that training and prediction use the same
+layout.
+
+Important files:
+
+- app/questionnaire.py
+  Defines the questionnaire, feature order, terminal questionnaire flow, and
+  conversion from answers to a feature vector.
+
+- app/preprocess.py
+  Loads, cleans, normalizes, merges, and imputes the available datasets.
+
+- app/model.py
+  Defines the machine-learning models, training process, evaluation process,
+  artifact saving, and artifact loading.
+
+- train.py
+  Provides the questionnaire-model training entry point.
+
+
+3. QUESTIONNAIRE DATA PROCESSING
+--------------------------------
+
+The preprocessing pipeline uses three CSV datasets:
+
+- data/autism_adult_data_filled.csv
+- data/autism_africa_baseline_1000_filled.csv
+- data/autism_africa_low_detection_2000_filled.csv
+
+The preprocessing code:
+
+- Normalizes different column names across datasets.
+- Converts binary fields into numeric values.
+- Converts age from months to years where required.
+- Converts developmental milestone values to numeric values.
+- Standardizes the target into 0 and 1.
+- Removes the original "result" AQ total score to avoid directly leaking a
+  rule-based diagnosis shortcut into the model.
+- Adds missing unified features where a dataset does not contain them.
+- Imputes missing numerical values with medians.
+- Fills missing binary values with zero.
+- Produces a consistent feature matrix for training.
+
+The unified model feature list contains 32 features:
+
+- A1_Score through A10_Score
+- age
+- gender
+- jaundice
+- family_history_asd
+- used_app_before
+- preeclampsia
+- birth_asphyxia
+- preterm_birth
+- low_birth_weight
+- consanguineous_marriage
+- social_communication_delay
+- repetitive_behaviors_score
+- sensory_sensitivities
+- first_words_months
+- two_word_phrases_months
+- eye_contact_age_months
+- social_smile_months
+- intellectual_disability
+- epilepsy
+- adhd
+- language_disorder
+- motor_delay
+
+
+4. QUESTIONNAIRE MACHINE-LEARNING MODEL
+---------------------------------------
+
+Two models are trained and evaluated:
+
+- Logistic Regression.
+- Random Forest.
+
+The training process includes:
+
+- Stratified train/test splitting.
+- Feature scaling with StandardScaler.
+- Cross-validation.
+- Accuracy measurement.
+- Precision measurement.
+- Recall measurement.
+- F1-score measurement.
+- Confusion-matrix generation.
+- Selection of the best model based on F1 score.
+- Saving the trained model with joblib.
+- Saving model metrics.
+- Saving Random Forest feature importance when available.
+
+Current saved model artifacts:
+
+- models/best_model.pkl
+- models/scaler.pkl
+- models/metrics.json
+- models/feature_importance.json
+
+The saved metrics currently report Random Forest as the best model:
+
+- Accuracy: 99.19%
+- Precision: 97.06%
+- Recall: 94.29%
+- F1 score: 95.65%
+
+The saved Random Forest confusion matrix is:
+
+    [[669, 2],
+     [4, 66]]
+
+These metrics are dataset evaluation results only. They do not establish clinical
+accuracy or clinical suitability.
+
+
+5. FASTAPI APPLICATION
+----------------------
+
+The main FastAPI application is implemented in:
+
+- app/main.py
+
+The application:
+
+- Loads the trained model and scaler during startup.
+- Loads metrics and feature-importance artifacts.
+- Initializes database metadata.
+- Enables CORS.
+- Exposes health, questionnaire, profile, prediction, video, metrics, and game
+  session endpoints.
+
+Implemented API endpoints:
+
+GET /health
+    Checks whether the questionnaire model was successfully loaded.
+
+GET /questions
+    Returns the available questionnaire questions and the total question count.
+
+POST /profiles/
+    Creates a child profile and returns the generated child ID.
+
+POST /predict
+    Accepts a child ID and feature dictionary, calculates a questionnaire
+    probability, combines it with a video score, assigns a Low, Medium, or High
+    risk level, returns top model features, and saves the screening transaction.
+
+POST /video/analyze
+    Starts the video-analysis pipeline for an existing child profile using a
+    webcam index or server-accessible video path.
+
+POST /profiles/{child_id}/game-session/
+    Stores cognitive-game performance and compares the current result with the
+    most recent result for the same child and game.
+
+GET /metrics
+    Returns saved questionnaire-model metrics.
+
+GET /feature-importance
+    Returns the most important saved questionnaire-model features.
+
+
+6. DATABASE AND PERSISTENCE
+---------------------------
+
+Database support is implemented with SQLAlchemy and PostgreSQL.
+
+The database configuration and SQLAlchemy models are defined in:
+
+- app/database.py
+
+The current data models include:
+
+ChildProfile
+    Stores:
+    - Child ID.
+    - Name.
+    - Age in months.
+    - Sex.
+    - Family history of ASD.
+    - Jaundice history.
+    - Creation timestamp.
+
+ScreeningTransaction
+    Stores:
+    - Child ID.
+    - Questionnaire score.
+    - Video score.
+    - Hybrid risk score.
+    - Risk tier.
+    - Creation timestamp.
+
+CognitiveGameLog
+    Stores:
+    - Child ID.
+    - Game name.
+    - Accuracy.
+    - Completion time.
+    - Reaction time.
+    - Session date.
+
+Database dependency management is provided through the get_db() function.
+
+The PostgreSQL development container is configured in:
+
+- docker-compose.yml
+
+The compose file defines a PostgreSQL 16 Alpine container exposed on host port
+5435 and a persistent database volume.
+
+
+7. RISK SCORING AND EXPLANATIONS
+--------------------------------
+
+Risk-level classification is implemented in:
+
+- app/utils.py
+
+The current risk thresholds are:
+
+- Low: 0.00 to less than 0.40.
+- Medium: 0.40 to less than 0.70.
+- High: 0.70 to 1.00.
+
+The utility layer also provides:
+
+- Feature validation.
+- Ordered feature-vector construction.
+- Top-N feature-importance extraction.
+- Fixed weighted questionnaire/video score combination.
+
+The prediction response includes:
+
+- Questionnaire score.
+- Final score.
+- Risk level.
+- Top features.
+- Human-readable explanation.
+
+
+8. COGNITIVE GAME PROGRESS TRACKING
+------------------------------------
+
+The application supports recording cognitive-game sessions for a child.
+
+The current game log endpoint calculates:
+
+- Accuracy difference from the previous session.
+- Completion-time improvement.
+- A status describing whether progress was verified or performance remained
+  stable.
+
+The database model supports games such as:
+
+- Attention Arena.
+- Emotion Mirror.
+- Memory Match.
+- Eye Tracking Challenge.
+- Pattern Recall.
+
+The system currently stores and compares game metrics. The actual games or
+frontend game experiences are not included in the repository snapshot.
+
+
+9. EXPERIMENTAL VIDEO PIPELINE
+------------------------------
+
+The video-analysis module is implemented under:
+
+- app/video/
+
+The documented pipeline is:
+
+    Webcam or video file
+        -> OpenCV frame capture
+        -> MediaPipe face landmarks
+        -> Geometric behavioral features
+        -> DeepFace emotion analysis
+        -> Session-level aggregation
+        -> 47-feature vector
+        -> Optional video Random Forest
+        -> Video risk score and confidence
+
+The pipeline intentionally separates responsibilities:
+
+- OpenCV handles capture only.
+- MediaPipe handles face landmarks and geometric calculations.
+- DeepFace handles expression/emotion analysis.
+- The video Random Forest is the only component that makes a classification
+  decision.
+
+No direct rule such as "if a computer-vision signal has a certain value, then
+the child has autism" is implemented.
+
+
+10. VIDEO CAPTURE
+-----------------
+
+Implemented in:
+
+- app/video/capture.py
+
+The capture layer supports:
+
+- Webcam device indexes.
+- Video file paths.
+- Frame reading.
+- RGB conversion.
+- Session-duration limits.
+- Invalid-frame handling.
+- Camera-open failure handling.
+- Safe resource release.
+
+The capture layer does not perform classification or feature interpretation.
+
+
+11. MEDIAPIPE PROCESSING
+------------------------
+
+Implemented in:
+
+- app/video/mediapipe_processor.py
+
+The MediaPipe processing layer supports:
+
+- Face landmark extraction.
+- Primary-face selection.
+- Face bounding-box extraction.
+- Approximate horizontal and vertical gaze position.
+- Eye Aspect Ratio calculation.
+- Eye-closed detection.
+- Head-pose estimation using solvePnP.
+- Overall facial landmark movement.
+- Mouth movement.
+- Eyebrow movement.
+
+The video README explicitly documents that:
+
+- Gaze is an uncalibrated eye-position proxy.
+- Head-pose angles are approximate.
+- Facial movement is raw landmark displacement and is not FACS Action Units.
+- Blink detection is a heuristic based on EAR and consecutive frames.
+
+
+12. DEEPFACE PROCESSING
+-----------------------
+
+Implemented in:
+
+- app/video/deepface_processor.py
+
+DeepFace is used for sampled emotion analysis rather than every frame, because
+it is more computationally expensive than MediaPipe.
+
+The configured emotion labels are:
+
+- neutral
+- happy
+- sad
+- surprise
+- fear
+- disgust
+- angry
+
+The system tracks successful and failed DeepFace attempts and includes the
+success ratio in the aggregated video features.
+
+If DeepFace is unavailable, the service logs a warning and continues the
+session without emotion features where possible.
+
+
+13. VIDEO SESSION TRACKING
+--------------------------
+
+Implemented in:
+
+- app/video/session.py
+
+SessionData stores time-series values and quality information, including:
+
+- Timestamps.
+- Gaze measurements.
+- Eye Aspect Ratio values.
+- Eye-closed frames.
+- Head-pose values.
+- Facial movement values.
+- Emotion distributions.
+- Total frames.
+- Valid face frames.
+- Capture failures.
+- No-face frames.
+- Multiple-face frames.
+- DeepFace attempts, successes, and failures.
+
+The session layer also:
+
+- Counts blinks using consecutive closed-eye frames.
+- Calculates blink rate.
+- Calculates blink-duration mean and variance.
+- Calculates valid-frame ratio.
+- Calculates DeepFace success ratio.
+- Rejects sessions with insufficient usable data.
+
+The default minimum quality rules require:
+
+- At least 50% valid-frame ratio.
+- At least 60 valid face frames.
+
+
+14. VIDEO FEATURE VECTOR
+------------------------
+
+Implemented in:
+
+- app/video/features.py
+
+The video pipeline produces a fixed 47-dimensional feature vector.
+
+The feature groups are:
+
+Gaze: 8 features
+    Horizontal and vertical means, variance, entropy, looking-away proportion,
+    and direction-change rate.
+
+Blink and eye openness: 6 features
+    Blink count, blink rate, blink-duration statistics, EAR mean, and EAR
+    variance.
+
+Head pose: 8 features
+    Yaw, pitch, and roll means and variances, plus head-movement statistics.
+
+Facial movement: 7 features
+    Overall, mouth, and eyebrow movement statistics and movement frequency.
+
+DeepFace emotion: 17 features
+    Emotion means and variances, distribution entropy, dominant-emotion switch
+    rate, and DeepFace success ratio.
+
+Data quality: 1 feature
+    Valid-frame ratio.
+
+The feature schema is persisted so training and inference cannot silently use
+different feature orders.
+
+
+15. VIDEO MODEL SUPPORT
+-----------------------
+
+Implemented in:
+
+- app/video/model.py
+- train_video.py
+
+The video model is separate from the questionnaire model.
+
+The video training script expects a labeled CSV containing:
+
+- All 47 video feature columns.
+- A target column containing binary values:
+  - 0 = non-ASD
+  - 1 = ASD
+
+The video training process supports:
+
+- Input-column validation.
+- Train/test splitting.
+- StandardScaler fitting.
+- Random Forest training.
+- Cross-validation.
+- Accuracy, precision, recall, F1, confusion matrix, and ROC-AUC metrics.
+- Saving the video model.
+- Saving the video scaler.
+- Saving video metrics.
+- Saving the canonical feature schema.
+
+Expected generated artifacts:
+
+- models/video_model.pkl
+- models/video_scaler.pkl
+- models/video_metrics.json
+- models/video_feature_schema.json
+
+IMPORTANT CURRENT STATUS:
+
+No labeled video-derived training dataset currently exists in the project.
+The three existing datasets are questionnaire/demographic datasets and are not
+valid input for train_video.py.
+
+Therefore, models/video_model.pkl does not currently exist, and the video
+pipeline cannot produce a real video-derived risk prediction yet.
+
+When a sufficient video session is captured without a trained video model, the
+API returns:
+
+    video_model_not_available
+
+It does not fabricate a placeholder video prediction.
+
+
+16. VIDEO SERVICE AND FAILURE HANDLING
+--------------------------------------
+
+Implemented in:
+
+- app/video/service.py
+
+The service orchestrates the complete video session without directly depending
+on FastAPI or database code.
+
+It returns explicit statuses for:
+
+- Successful analysis.
+- Insufficient video data.
+- Missing video model.
+- Camera or dependency errors.
+- Unexpected processing errors.
+
+The service reports:
+
+- Video score when available.
+- Video confidence when available.
+- Predicted class when available.
+- Session duration.
+- Valid-frame ratio.
+- Feature count.
+- Error or status detail.
+
+
+17. VIDEO/FUSION DESIGN
+-----------------------
+
+Implemented in:
+
+- app/video/fusion.py
+
+The dynamic fusion module defines:
+
+    R_hybrid = alpha * R_questionnaire
+                + (1 - alpha) * R_video
+
+The questionnaire weight increases when video confidence is low and decreases
+when video confidence is high.
+
+If video is unavailable, the fusion function uses alpha = 1.0, so the hybrid
+score equals the questionnaire score.
+
+The fusion code clearly documents that this is an engineering choice and not a
+clinically validated formula.
+
+CURRENT INTEGRATION NOTE:
+
+The current /predict endpoint still calls app.utils.combine_scores(), which is
+the older fixed-weight implementation using questionnaire weight 0.6 and video
+weight 0.4. The newer dynamic fusion implementation exists, but it is not
+currently wired into /predict.
+
+Also, the current PredictRequest model defaults video_score to 0.5. This means
+the questionnaire endpoint can still use a placeholder-style video score unless
+the caller supplies another value.
+
+
+18. TESTING IMPLEMENTED
+-----------------------
+
+Automated tests exist under:
+
+- tests/
+- tests/video/
+
+The tests cover:
+
+- Video capture failure handling.
+- Video frame reading.
+- RGB conversion.
+- Safe capture cleanup.
+- The 47-feature schema.
+- Feature-name uniqueness.
+- Feature-vector completeness.
+- NaN and infinity prevention.
+- Empty-session behavior.
+- Entropy calculations.
+- Fusion behavior.
+- Video-model-unavailable behavior.
+- Camera failure status.
+- Insufficient-data status.
+- Successful service behavior with a model.
+- Eye feature geometry.
+- Gaze geometry.
+- Facial movement detection.
+- Head-pose handling.
+- Blink counting.
+- Valid-frame-ratio calculation.
+- DeepFace success/failure tracking.
+
+There are also tests and utilities for DeepFace, startup timing, camera testing,
+and model auditing.
+
+Some tests are hardware- or runtime-dependent. Camera and visual tests may need
+to be run separately on a machine with the required camera and model assets.
+
+
+19. AVAILABLE MODEL AND RUNTIME ASSETS
+--------------------------------------
+
+The repository currently includes:
+
+- models/best_model.pkl
+- models/scaler.pkl
+- models/feature_importance.json
+- models/metrics.json
+- models/face_landmarker.task
+
+The MediaPipe face-landmarker task asset is present.
+
+The video Random Forest artifacts are not currently present because real labeled
+video-derived feature data has not yet been supplied.
+
+
+20. CURRENT RUNNING/USABLE SCOPE
+--------------------------------
+
+The most complete currently usable functionality is:
+
+1. Starting the FastAPI application.
+2. Loading the questionnaire model.
+3. Checking model health.
+4. Retrieving the questionnaire.
+5. Creating child profiles.
+6. Submitting questionnaire features for prediction.
+7. Saving screening results.
+8. Recording cognitive-game metrics.
+9. Reading model metrics and feature importance.
+10. Running the experimental video capture and feature-extraction pipeline.
+11. Receiving explicit video-quality or missing-model statuses.
+
+
+21. NOT YET COMPLETE
+--------------------
+
+The following areas remain incomplete or require further work:
+
+- No frontend user interface is included in the current repository snapshot.
+- No complete end-to-end child/parent/clinician user flow is implemented.
+- No actual cognitive games are included; only game-result logging exists.
+- No real labeled video-derived training dataset is included.
+- No trained video classification model is available.
+- The dynamic confidence-weighted fusion is not wired into /predict.
+- Video uploads from a browser or client are not implemented.
+- The current video endpoint expects a webcam index or server-accessible path.
+- Authentication and authorization are not implemented.
+- Privacy and consent workflows are not implemented.
+- Encryption and access-control policies are not implemented.
+- Production-grade secret management is not implemented.
+- CORS is currently permissive.
+- Clinical validation is not implemented.
+- External validation on an independent population is not implemented.
+- Probability calibration is not implemented for the Random Forest outputs.
+- Deployment configuration is limited to the PostgreSQL Docker Compose setup.
+- Production monitoring and audit controls remain incomplete.
+- Error handling and input validation need further production hardening.
+
+
+22. OVERALL STATUS
+------------------
+
+MindBloom currently has a functional experimental backend foundation:
+
+- The questionnaire ML screening path is implemented.
+- The database persistence layer is implemented.
+- The FastAPI endpoints are implemented.
+- Cognitive-game progress logging is implemented.
+- The video feature-extraction pipeline is substantially implemented.
+- Automated tests cover many core video components.
+
+The project is not yet a complete production product. The main technical gap is
+the absence of real labeled video data and a trained video model. The main
+product gaps are the absence of a frontend, complete user workflows, security,
+privacy, clinical validation, and production deployment hardening.
+

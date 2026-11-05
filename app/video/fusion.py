@@ -1,100 +1,140 @@
 """
-app/video/fusion.py
-─────────────────────────────────────────────────────────────────────────────
-Dynamic (confidence-weighted) fusion of questionnaire and video scores, per
-§19 of spec:
+Research-paper hybrid fusion of questionnaire and combined-video ASD scores.
 
-    R_hybrid = alpha * Rq + (1 - alpha) * Rv
+    c = 2 * max(p_v, 1 - p_v) - 1
+    alpha = clip(0.90 - 0.60 * c, 0.30, 0.90)
+    R_hybrid = alpha * R_q + (1 - alpha) * R_v
 
-This is kept SEPARATE from app.utils.combine_scores (the existing
-fixed-weight q_weight=0.6/v_weight=0.4 placeholder), which is left in place
-untouched as a fallback/reference implementation. app/main.py is switched to
-call get_alpha()/hybrid_fusion() from this module instead.
+p_v is the combined video model's P(ASD). It is never an emotion probability
+or a Random Forest max-class confidence.
 
-──────────────────────────────────────────────────────────────────────────
-IMPLEMENTATION DECISION — NOT A VALIDATED CLINICAL FORMULA
-──────────────────────────────────────────────────────────────────────────
-The paper motivating this project describes "dynamic weighting based on
-video confidence" but (as provided to this implementation) does not specify
-an exact alpha(confidence) formula. Rather than inventing one and presenting
-it as scientifically established, this module implements ONE explicit,
-documented, and swappable mapping:
-
-    alpha(c) = ALPHA_FLOOR + (ALPHA_CEILING - ALPHA_FLOOR) * (1 - c)
-
-where c = video_confidence in [0, 1]. Intuition: when the video model is
-very confident (c -> 1), alpha shrinks toward ALPHA_FLOOR, giving video more
-influence; when the video model is unconfident (c -> 0), alpha rises toward
-ALPHA_CEILING, giving the questionnaire more influence. This is linear and
-monotonic by construction, and both endpoints are configurable constants
-below rather than hard-coded magic numbers.
-
-This is an ENGINEERING CHOICE, presented as such. If you have (or later
-obtain) empirical data on how video-confidence should trade off against
-questionnaire reliability, replace get_alpha() with a better-justified
-mapping — the rest of the pipeline only depends on this function's
-signature (confidence: float) -> float, not its internals.
+This module is kept separate from app.utils.combine_scores, which remains
+the untouched fixed-weight reference used by /predict.
 """
 
 from __future__ import annotations
 
-import os
-from typing import Optional
+import math
+from typing import Any, Optional
 
-import numpy as np
+FUSION_FUNCTION = "app.video.fusion.hybrid_fusion"
+FUSION_VERSION = "research-paper-1"
 
-# Bounds for alpha (weight on the questionnaire score). Configurable via env
-# so this can be tuned without a code change while the exact formula is
-# still under discussion/validation.
-ALPHA_FLOOR = float(os.environ.get("VIDEO_FUSION_ALPHA_FLOOR", 0.4))
-ALPHA_CEILING = float(os.environ.get("VIDEO_FUSION_ALPHA_CEILING", 0.9))
+ALPHA_FLOOR = 0.30
+ALPHA_CEILING = 0.90
+ALPHA_INTERCEPT = 0.90
+ALPHA_SLOPE = 0.60
 
-assert 0.0 <= ALPHA_FLOOR <= ALPHA_CEILING <= 1.0, (
-    "ALPHA_FLOOR must be <= ALPHA_CEILING and both must be in [0, 1]."
-)
+
+def _as_unit_interval(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric) or not 0.0 <= numeric <= 1.0:
+        return None
+    return numeric
+
+
+def _require_questionnaire_score(value: Any) -> float:
+    if value is None:
+        raise ValueError("Questionnaire risk score is required.")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Questionnaire risk score must be a finite number in [0, 1]."
+        ) from exc
+    if not math.isfinite(numeric) or not 0.0 <= numeric <= 1.0:
+        raise ValueError("Questionnaire risk score must be a finite number in [0, 1].")
+    return numeric
+
+
+def video_confidence_from_probability(p_v: float) -> float:
+    """Paper video confidence: c = 2 * max(p_v, 1 - p_v) - 1."""
+    return (2.0 * max(p_v, 1.0 - p_v)) - 1.0
 
 
 def get_alpha(video_confidence: Optional[float]) -> float:
     """
-    Map video_confidence -> alpha (weight on questionnaire score Rq).
+    Map paper confidence c -> questionnaire weight alpha.
 
-    video_confidence=None (video unavailable/insufficient data) -> alpha=1.0
-    so R_hybrid collapses exactly to the questionnaire score, per §19.
+    video_confidence=None (video unavailable) -> alpha=1.0 so R_hybrid is R_q.
+    Otherwise alpha = 0.90 - 0.60 * c, clamped to [0.30, 0.90].
     """
     if video_confidence is None:
         return 1.0
-    c = float(np.clip(video_confidence, 0.0, 1.0))
-    alpha = ALPHA_FLOOR + (ALPHA_CEILING - ALPHA_FLOOR) * (1.0 - c)
-    return float(np.clip(alpha, 0.0, 1.0))
+    try:
+        c = float(video_confidence)
+    except (TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(c):
+        return 1.0
+    alpha = ALPHA_INTERCEPT - (ALPHA_SLOPE * c)
+    return float(min(ALPHA_CEILING, max(ALPHA_FLOOR, alpha)))
+
+
+def _questionnaire_only(rq: float, video_model_available: bool) -> dict:
+    return {
+        "questionnaire_risk_score": rq,
+        "video_risk_score": None,
+        "video_probability": None,
+        "video_confidence": None,
+        "alpha": 1.0,
+        "hybrid_risk_score": rq,
+        "scoring_method": "questionnaire-only",
+        "video_model_available": video_model_available,
+        "questionnaire_score": rq,
+        "video_score": None,
+    }
 
 
 def hybrid_fusion(
     questionnaire_score: float,
-    video_score: Optional[float],
-    video_confidence: Optional[float] = None,
+    video_score: Optional[float] = None,
+    video_probability: Optional[float] = None,
+    *,
+    available: bool = True,
+    video_model_available: Optional[bool] = None,
 ) -> dict:
     """
-    Compute R_hybrid = alpha * Rq + (1 - alpha) * Rv.
+    Compute R_hybrid = alpha * R_q + (1 - alpha) * R_v.
 
-    Returns a dict (not just a float) so callers/logs/API responses can see
-    the alpha that was actually used, which matters for auditability of a
-    screening tool.
+    If p_v is omitted, R_v is used as p_v. Missing or invalid video input
+    yields questionnaire-only scoring; missing video is never treated as 0.
+    Invalid questionnaire scores raise ValueError.
     """
-    rq = float(np.clip(questionnaire_score, 0.0, 1.0))
+    rq = _require_questionnaire_score(questionnaire_score)
+    model_available = True if video_model_available is None else bool(video_model_available)
 
-    if video_score is None:
-        alpha = 1.0
-        r_hybrid = rq
-    else:
-        rv = float(np.clip(video_score, 0.0, 1.0))
-        alpha = get_alpha(video_confidence)
-        r_hybrid = alpha * rq + (1.0 - alpha) * rv
-        r_hybrid = float(np.clip(r_hybrid, 0.0, 1.0))
+    if available is False:
+        return _questionnaire_only(rq, False)
+
+    rv = _as_unit_interval(video_score)
+    pv = video_probability if video_probability is not None else video_score
+    pv = _as_unit_interval(pv)
+
+    if rv is None or pv is None:
+        return _questionnaire_only(rq, False if video_model_available is None else model_available)
+
+    c = video_confidence_from_probability(pv)
+    alpha = get_alpha(c)
+    r_hybrid = (alpha * rq) + ((1.0 - alpha) * rv)
+    if not math.isfinite(r_hybrid):
+        raise ValueError("Hybrid risk score is not finite.")
+    r_hybrid = float(r_hybrid)
 
     return {
-        "questionnaire_score": rq,
-        "video_score": video_score,
-        "video_confidence": video_confidence,
+        "questionnaire_risk_score": rq,
+        "video_risk_score": rv,
+        "video_probability": pv,
+        "video_confidence": c,
         "alpha": alpha,
         "hybrid_risk_score": r_hybrid,
+        "scoring_method": "hybrid",
+        "video_model_available": model_available,
+        "questionnaire_score": rq,
+        "video_score": rv,
     }

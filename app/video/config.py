@@ -38,12 +38,13 @@ DEV_SESSION_DURATION_SECONDS = _env_int("VIDEO_DEV_SESSION_SECONDS", 30)
 TARGET_FPS = _env_int("VIDEO_TARGET_FPS", 30)
 
 # =========================================================================
-# DEEPFACE SAMPLING
+# EMOTION SAMPLING
 # =========================================================================
-# Running DeepFace on every single frame is unnecessarily slow (it's a much
-# heavier model than MediaPipe's face mesh). We run MediaPipe on every valid
-# frame, but only run DeepFace every N frames.
+# ViT runs on sampled face crops while MediaPipe runs on every valid frame.
+# The legacy names below remain compatibility settings for older scripts.
 DEEPFACE_EVERY_N_FRAMES = _env_int("VIDEO_DEEPFACE_EVERY_N_FRAMES", 5)
+VIT_EVERY_N_FRAMES = _env_int("VIDEO_VIT_EVERY_N_FRAMES", DEEPFACE_EVERY_N_FRAMES)
+PROCESSING_TIMEOUT_SECONDS = _env_int("VIDEO_PROCESSING_TIMEOUT_SECONDS", 360)
 
 DEEPFACE_DETECTOR_BACKEND = os.environ.get("VIDEO_DEEPFACE_BACKEND", "opencv")
 DEEPFACE_ACTIONS = ["emotion"]
@@ -88,3 +89,7 @@ VIDEO_MODEL_PATH = os.path.join(MODELS_DIR, "video_model.pkl")
 VIDEO_SCALER_PATH = os.path.join(MODELS_DIR, "video_scaler.pkl")
 VIDEO_METRICS_PATH = os.path.join(MODELS_DIR, "video_metrics.json")
 VIDEO_FEATURE_SCHEMA_PATH = os.path.join(MODELS_DIR, "video_feature_schema.json")
+
+# Upload controls for the FastAPI video endpoint.
+MAX_VIDEO_UPLOAD_BYTES = _env_int("VIDEO_MAX_UPLOAD_BYTES", 50 * 1024 * 1024)
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm"}

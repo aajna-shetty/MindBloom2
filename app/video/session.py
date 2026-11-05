@@ -1,8 +1,8 @@
 """
 app/video/session.py
 ─────────────────────────────────────────────────────────────────────────────
-Accumulates per-frame measurements from MediaPipeProcessor and
-DeepFaceProcessor across an entire session, applies §11 data-quality
+accumulates per-frame measurements from MediaPipeProcessor and sampled ViT
+inference across an entire session, applies §11 data-quality
 handling, and does session-level blink counting (which needs visibility
 across consecutive frames, unlike the other per-frame features).
 
@@ -22,7 +22,6 @@ from app.video.config import (
     EMOTION_LABELS,
 )
 from app.video.mediapipe_processor import LandmarkFrameFeatures
-from app.video.deepface_processor import DeepFaceFrameResult
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +46,13 @@ class SessionData:
     mouth_movement: List[float] = field(default_factory=list)
     eyebrow_movement: List[float] = field(default_factory=list)
 
-    # One dict per successful DeepFace sample (not per frame — sparse).
+    # One dict per successful ViT sample (not per frame — sparse).
     emotion_scores: List[Dict[str, float]] = field(default_factory=list)
 
     # Quality counters (§11)
     total_frames: int = 0
+    captured_frames: int = 0
+    mediapipe_processed_frames: int = 0
     valid_face_frames: int = 0        # exactly-one-face-detected frames used for features
     invalid_frames: int = 0           # capture failures
     no_face_frames: int = 0
@@ -59,12 +60,31 @@ class SessionData:
     deepface_attempts: int = 0
     deepface_successes: int = 0
     deepface_failures: int = 0
+    vit_attempts: int = 0
+    vit_submitted_frames: int = 0
+    vit_successes: int = 0
+    vit_failures: int = 0
+    vit_latencies_ms: List[float] = field(default_factory=list)
+    mediapipe_latencies_ms: List[float] = field(default_factory=list)
+    processing_errors: int = 0
 
     def record_capture_failure(self) -> None:
+        self.captured_frames += 1
         self.total_frames += 1
         self.invalid_frames += 1
 
+    def record_deepface_result(self, result: Any) -> None:
+        """Retain compatibility for the explicitly legacy test harness."""
+        self.deepface_attempts += 1
+        if result.success and result.emotion_scores:
+            self.deepface_successes += 1
+            self.emotion_scores.append(result.emotion_scores)
+        else:
+            self.deepface_failures += 1
+
     def record_landmark_result(self, timestamp: float, result: LandmarkFrameFeatures) -> None:
+        self.captured_frames += 1
+        self.mediapipe_processed_frames += 1
         self.total_frames += 1
 
         if not result.face_detected:
@@ -97,13 +117,21 @@ class SessionData:
             self.mouth_movement.append(result.mouth_movement)
             self.eyebrow_movement.append(result.eyebrow_movement)
 
-    def record_deepface_result(self, result: DeepFaceFrameResult) -> None:
-        self.deepface_attempts += 1
-        if result.success and result.emotion_scores:
-            self.deepface_successes += 1
-            self.emotion_scores.append(result.emotion_scores)
+    def record_vit_result(
+        self,
+        emotion_scores: Optional[Dict[str, float]],
+        latency_ms: float,
+    ) -> None:
+        self.vit_attempts += 1
+        self.vit_latencies_ms.append(float(latency_ms))
+        if emotion_scores:
+            self.vit_successes += 1
+            self.emotion_scores.append(dict(emotion_scores))
         else:
-            self.deepface_failures += 1
+            self.vit_failures += 1
+
+    def record_vit_submission(self) -> None:
+        self.vit_submitted_frames += 1
 
     # -- blink counting (needs the full eye_closed_frames sequence) --------
 
@@ -172,6 +200,8 @@ class SessionData:
     def quality_metrics(self) -> Dict[str, Any]:
         return {
             "total_frames": self.total_frames,
+            "captured_frames": self.captured_frames,
+            "mediapipe_processed_frames": self.mediapipe_processed_frames,
             "valid_face_frames": self.valid_face_frames,
             "invalid_frames": self.invalid_frames,
             "no_face_frames": self.no_face_frames,
@@ -183,6 +213,14 @@ class SessionData:
             "deepface_success_ratio": round(
                 self.deepface_successes / self.deepface_attempts, 4
             ) if self.deepface_attempts else 0.0,
+            "vit_attempts": self.vit_attempts,
+            "vit_submitted_frames": self.vit_submitted_frames,
+            "vit_successes": self.vit_successes,
+            "vit_failures": self.vit_failures,
+            "vit_success_ratio": round(
+                self.vit_successes / self.vit_attempts, 4
+            ) if self.vit_attempts else 0.0,
+            "processing_errors": self.processing_errors,
         }
 
     def has_sufficient_data(self) -> bool:
@@ -190,4 +228,3 @@ class SessionData:
             self.valid_frame_ratio() >= MIN_VALID_FRAME_RATIO
             and self.valid_face_frames >= MIN_VALID_FRAME_COUNT
         )
-

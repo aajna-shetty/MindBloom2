@@ -82,18 +82,22 @@ class TestFusion:
     def test_alpha_is_one_when_video_unavailable(self):
         assert get_alpha(None) == 1.0
 
-    def test_alpha_monotonically_decreases_with_confidence(self):
+    def test_alpha_monotonically_decreases_with_paper_confidence(self):
         alphas = [get_alpha(c) for c in [0.0, 0.25, 0.5, 0.75, 1.0]]
         assert alphas == sorted(alphas, reverse=True)
+        assert alphas[0] == pytest.approx(0.90)
+        assert alphas[-1] == pytest.approx(0.30)
 
     def test_hybrid_score_collapses_to_questionnaire_without_video(self):
         result = hybrid_fusion(0.63, None, None)
         assert result["hybrid_risk_score"] == pytest.approx(0.63)
         assert result["alpha"] == 1.0
+        assert result["scoring_method"] == "questionnaire-only"
+        assert result["video_risk_score"] is None
 
-    def test_hybrid_score_bounded_0_1(self):
-        result = hybrid_fusion(1.5, 1.5, 1.5)  # deliberately out-of-range inputs
-        assert 0.0 <= result["hybrid_risk_score"] <= 1.0
+    def test_invalid_questionnaire_score_is_rejected(self):
+        with pytest.raises(ValueError):
+            hybrid_fusion(1.5, 0.2, 0.2)
 
 
 class TestVideoModelUnavailable:

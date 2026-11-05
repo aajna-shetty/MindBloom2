@@ -6,7 +6,7 @@ schema (§13 of spec) and aggregates a SessionData time series into that
 vector (§12 of spec).
 
 The schema below is a defensible mapping from the raw signals produced by
-mediapipe_processor.py and deepface_processor.py to a fixed feature set —
+mediapipe_processor.py and the sampled emotion processor to a fixed feature set —
 it is NOT 47 arbitrary numbers chosen to hit a target count. Every entry
 below documents its source and calculation. The ORDER of VIDEO_FEATURES is
 fixed and is what both train_video.py and app/video/model.py must use.
@@ -100,23 +100,23 @@ VIDEO_FEATURE_SCHEMA: List[Dict[str, str]] = [
     dict(name="facial_movement_frequency", description="Proportion of frames where overall facial movement exceeds a low-motion baseline (movement 'event' rate).",
          source="Derived from overall_facial_movement sequence", calculation="fraction of frames with overall_movement > median(overall_movement)", units="[0,1]"),
 
-    # ---- DEEPFACE EMOTION (17) — source: deepface_processor.analyze_frame --
+    # ---- VIT EMOTION (17) — source: emotion_processor.analyze -------------
     *[
-        dict(name=f"emotion_{label}_mean", description=f"Mean DeepFace '{label}' probability across sampled frames.",
-             source="DeepFace emotion analysis (sampled every N frames)", calculation=f"mean({label} probability per sample)", units="[0,1]")
+        dict(name=f"emotion_{label}_mean", description=f"Mean ViT '{label}' probability across sampled frames.",
+             source="ViT emotion analysis (sampled every N frames)", calculation=f"mean({label} probability per sample)", units="[0,1]")
         for label in EMOTION_LABELS
     ],
     *[
-        dict(name=f"emotion_{label}_variance", description=f"Variance of DeepFace '{label}' probability across sampled frames.",
-             source="DeepFace emotion analysis", calculation=f"variance({label} probability per sample)", units="unitless")
+        dict(name=f"emotion_{label}_variance", description=f"Variance of ViT '{label}' probability across sampled frames.",
+             source="ViT emotion analysis", calculation=f"variance({label} probability per sample)", units="unitless")
         for label in EMOTION_LABELS
     ],
-    dict(name="emotion_distribution_entropy_mean", description="Mean Shannon entropy of the per-sample emotion probability distribution (higher = less decisive/more mixed expression).",
-         source="DeepFace emotion analysis", calculation="mean(shannon_entropy(emotion_probs) per sample)", units="bits, >=0"),
-    dict(name="dominant_emotion_switch_rate", description="Rate at which the DeepFace dominant emotion label changes between consecutive samples.",
-         source="DeepFace dominant_emotion sequence", calculation="count(label changes)/num_samples", units="[0,1]"),
-    dict(name="deepface_success_ratio", description="Fraction of DeepFace sampling attempts that succeeded (data-quality signal for the emotion features above).",
-         source="session.py quality counters", calculation="deepface_successes/deepface_attempts", units="[0,1]"),
+    dict(name="emotion_distribution_entropy_mean", description="Mean Shannon entropy of the per-sample ViT emotion probability distribution (higher = less decisive/more mixed expression).",
+         source="ViT emotion analysis", calculation="mean(shannon_entropy(emotion_probs) per sample)", units="bits, >=0"),
+    dict(name="dominant_emotion_switch_rate", description="Rate at which the ViT dominant emotion label changes between consecutive samples.",
+         source="ViT dominant_emotion sequence", calculation="count(label changes)/num_samples", units="[0,1]"),
+    dict(name="deepface_success_ratio", description="Compatibility slot containing the sampled emotion-analysis success ratio (ViT for the unified pipeline).",
+         source="session.py ViT quality counters", calculation="vit_successes/vit_attempts", units="[0,1]"),
 
     # ---- SESSION DATA QUALITY (1) ------------------------------------------
     dict(name="valid_frame_ratio", description="Fraction of all captured frames that had exactly one usable detected face (overall data-quality signal for the whole vector).",
@@ -260,7 +260,7 @@ def build_feature_vector(session: SessionData) -> Dict[str, float]:
     else:
         feats["facial_movement_frequency"] = 0.0
 
-    # DeepFace emotions
+    # ViT emotions
     emo_samples = session.emotion_scores
     for label in EMOTION_LABELS:
         series = [s.get(label, 0.0) for s in emo_samples]
@@ -279,7 +279,11 @@ def build_feature_vector(session: SessionData) -> Dict[str, float]:
         feats["dominant_emotion_switch_rate"] = 0.0
 
     quality = session.quality_metrics()
-    feats["deepface_success_ratio"] = quality["deepface_success_ratio"]
+    feats["deepface_success_ratio"] = (
+        quality["vit_success_ratio"]
+        if quality["vit_attempts"]
+        else quality["deepface_success_ratio"]
+    )
     feats["valid_frame_ratio"] = quality["valid_frame_ratio"]
 
     return feats

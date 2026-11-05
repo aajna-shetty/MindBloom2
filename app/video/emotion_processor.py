@@ -61,10 +61,10 @@ class EmotionProcessor:
         with torch.inference_mode():
             _ = self.model(**inputs)
 
-    def analyze(self, face_image: np.ndarray, temperature: float = 1.15) -> Dict[str, Any]:
+    def analyze(self, face_image: np.ndarray) -> Dict[str, Any]:
         """
-        Runs ViT emotion classification on a cropped face image.
-        Applies calibrated logit scaling to balance subtle sadness and disgust.
+        Runs ViT emotion classification on a cropped face image using the
+        original model logits and standard softmax.
         """
         if face_image is None or face_image.size == 0:
             return {
@@ -84,13 +84,7 @@ class EmotionProcessor:
                 outputs = self.model(**inputs)
                 logits = outputs.logits[0].clone()
 
-                # Calibrate sadness logit slightly to counteract neutral bias on webcam
-                for idx, std_label in self.idx_to_standard.items():
-                    if std_label == "sad":
-                        logits[idx] += 0.45  # subtle baseline compensation
-
-                # Softmax with temperature scaling
-                probs = torch.nn.functional.softmax(logits / temperature, dim=-1).cpu().numpy()
+                probs = torch.nn.functional.softmax(logits, dim=-1).cpu().numpy()
 
             emotion_scores = {e: 0.0 for e in self.STANDARD_EMOTIONS}
             for idx, prob in enumerate(probs):

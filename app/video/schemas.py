@@ -9,27 +9,20 @@ touch existing definitions).
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
 class VideoAnalyzeRequest(BaseModel):
     """
-    `source` lets the same endpoint be used for a live local webcam session
-    on the machine running the API (source=0, or a device index), OR for a
-    pre-recorded file path already accessible to the server (e.g. uploaded
-    separately). This mirrors VideoCaptureSession's source parameter.
-
-    In a typical deployment the actual webcam capture happens client-side
-    (browser/app) and only the resulting video file is sent to the server;
-    wiring an upload endpoint is a follow-up integration step and is out of
-    scope for this module, which focuses on the extraction/scoring
-    pipeline itself.
+    `source` selects a live webcam index on the machine running the API.
+    Pre-recorded videos must be sent through the multipart `video` field;
+    arbitrary server filesystem paths are not accepted.
     """
     child_id: int
     source: str = Field(
         default="0",
-        description="Webcam index (e.g. '0') or a server-accessible video file path.",
+        description="Server webcam index, for example '0'. Uploaded files use the video form field.",
     )
     duration_seconds: Optional[int] = Field(
         default=None,
@@ -38,7 +31,16 @@ class VideoAnalyzeRequest(BaseModel):
 
 
 class VideoAnalyzeResponse(BaseModel):
-    status: str  # "success" | "insufficient_video_data" | "video_model_not_available" | "error"
+    status: str
+    session_id: str
+    video_model_status: str
+    mediapipe: Dict[str, Any] = Field(default_factory=dict)
+    vit: Dict[str, Any] = Field(default_factory=dict)
+    combined_features: Dict[str, Any] = Field(default_factory=dict)
+    performance: Dict[str, Any] = Field(default_factory=dict)
+    prediction: Dict[str, Any] = Field(default_factory=dict)
+    errors: List[Dict[str, str]] = Field(default_factory=list)
+    # Legacy fields retained for existing clients.
     video_score: Optional[float] = None
     video_confidence: Optional[float] = None
     predicted_class: Optional[int] = None
@@ -46,3 +48,14 @@ class VideoAnalyzeResponse(BaseModel):
     valid_frame_ratio: Optional[float] = None
     feature_count: Optional[int] = None
     detail: Optional[str] = None
+
+
+class AssessmentResponse(BaseModel):
+    assessment_id: str
+    status: str
+    participant_id: str
+    questionnaire: Dict[str, Any]
+    video_assessment: Dict[str, Any]
+    overall_summary: Dict[str, Any]
+    timing: Dict[str, Optional[float]]
+    errors: List[Dict[str, str]] = Field(default_factory=list)

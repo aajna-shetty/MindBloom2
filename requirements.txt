@@ -11,3 +11,4 @@ xgboost
 opencv-python>=4.9
 mediapipe>=0.10
 deepface>=0.0.93
+python-multipart>=0.0.9

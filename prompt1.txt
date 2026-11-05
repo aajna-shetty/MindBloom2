@@ -1,0 +1,843 @@
+# MINDBLOOM — COMPLETE BACKEND INTEGRATION, VIDEO PIPELINE CORRECTION AND ASD SCREENING IMPLEMENTATION
+
+Act as a senior Python backend architect, computer vision engineer and machine learning engineer.
+
+Your task is to inspect, explain, fix and complete my existing MindBloom backend.
+
+I need a fully integrated assessment system combining:
+
+1. Questionnaire assessment.
+2. MediaPipe facial and behavioral analysis.
+3. ViT emotion classification.
+4. Feature extraction.
+5. Mathematical scoring and threshold evaluation.
+6. Integrated assessment and report generation.
+7. REST APIs.
+8. SQLite persistence.
+
+This is an implementation task. Do not stop after explaining the architecture or suggesting changes.
+
+---
+
+# PART 1 — UNDERSTAND THE EXISTING VIDEO ARCHITECTURE
+
+The project currently has two execution entry points.
+
+### Entry point A: CLI webcam test
+
+Command:
+
+```powershell
+cd D:\MindBloom2\MindBloom
+python -m app.video.test_combined --duration 15 --sample-interval 5
+```
+
+Execution purpose:
+
+- Interactive webcam testing.
+- Displays the combined MediaPipe + ViT visualization.
+- Uses `cv2.imshow()`.
+- Displays facial landmarks, measurements and emotion predictions.
+
+The intended window is:
+
+`MindBloom - Combined MediaPipe + ViT Test`
+
+### Entry point B: Backend API
+
+Current execution flow:
+
+```text
+POST /api/v1/assessments/{assessment_id}/video/start
+    |
+    v
+CombinedVideoAssessmentService.run_and_persist()
+    |
+    v
+app.video.service.run_video_session()
+```
+
+This path is used by the REST API to execute video assessment and persist results.
+
+### Shared processing components
+
+Both entry points already reuse:
+
+- MediaPipe processor.
+- ViT `EmotionProcessor`.
+- Webcam capture logic.
+- Feature extraction.
+- Aggregation.
+
+**Do not create a third pipeline. Do not force the API to execute the CLI command. Do not duplicate the model implementations.**
+
+The correct architecture is:
+
+```text
+                  SHARED VIDEO PROCESSING CORE
+                              |
+                 ---------------------------
+                 |                         |
+                 v                         v
+          CLI ENTRY POINT             API ENTRY POINT
+          test_combined.py       CombinedVideoAssessmentService
+                 |                         |
+          Interactive display        run_video_session()
+                                           |
+                                      Persistence
+```
+
+Both paths must reuse the same underlying model-processing and feature-extraction implementations.
+
+## First explain the existing architecture
+
+Inspect the actual source code and explain:
+
+1. Which functions initialize MediaPipe.
+2. Which functions initialize ViT.
+3. Which functions initialize DeepFace, if any.
+4. Which functions open the webcam.
+5. Which functions call `cv2.imshow()`.
+6. Which functions create the two observed emotion windows.
+7. How the CLI and API entry points share the processing components.
+8. Whether any processing or model initialization is duplicated.
+9. How the 47-feature vector is generated.
+10. How the results are aggregated and persisted.
+
+Identify actual filenames, classes and functions.
+
+Do not assume that two entry points mean two independent models.
+
+---
+
+# PART 2 — FIX THE DUPLICATE EMOTION WINDOWS
+
+I have observed these two windows:
+
+- `MindBloom - DeepFace Emotion`
+- `MindBloom - Emotion Detection`
+
+They display different emotion probability distributions for what appears to be the same webcam feed.
+
+This is not what I want.
+
+### Required final video architecture
+
+**One webcam capture loop → MediaPipe + ViT → one combined video result.**
+
+MediaPipe must handle:
+
+- Face detection.
+- Facial landmarks.
+- Gaze measurements.
+- EAR.
+- Blink detection.
+- Head pose.
+- Facial movement.
+- Existing behavioral features.
+
+ViT must be the only active emotion-classification model.
+
+It must provide:
+
+- Angry.
+- Disgust.
+- Fear.
+- Happy.
+- Neutral.
+- Sad.
+- Surprise.
+
+### DeepFace requirements
+
+Audit all DeepFace references.
+
+Determine whether DeepFace is:
+
+- Being initialized.
+- Being called during webcam processing.
+- Opening an independent webcam window.
+- Being launched through an imported legacy module.
+- Being started in another thread or process.
+- Being called indirectly by the CLI or API.
+
+Disable unintended DeepFace execution in the active combined workflow.
+
+Do not unnecessarily delete unrelated legacy files.
+
+Do not create another emotion detector.
+
+### Display requirements
+
+The CLI must display exactly one combined window containing:
+
+- Webcam feed.
+- MediaPipe landmarks.
+- Gaze and EAR measurements.
+- Blink information.
+- Head pose and movement.
+- ViT dominant emotion.
+- Seven emotion probabilities.
+- ViT inference latency.
+- Source frame ID.
+- Prediction freshness.
+
+The displayed emotion and probabilities must come from the same ViT inference result.
+
+The API path does not need to display a separate window. It must return and persist the same underlying analysis results.
+
+Trace every `cv2.imshow()` call and verify that the active execution opens only the intended combined window.
+
+---
+
+# PART 3 — PRESERVE AND IMPROVE THE SHARED VIDEO PROCESSING CORE
+
+Keep the existing shared processing components.
+
+Refactor only where necessary to ensure both entry points call the same implementations.
+
+Avoid:
+
+- Duplicate model initialization.
+- Duplicate webcam capture loops.
+- Duplicate feature extraction.
+- Duplicate aggregation logic.
+- Separate emotion-classification implementations.
+
+### Frame synchronization
+
+Every frame must have:
+
+- Frame ID.
+- Capture timestamp.
+- MediaPipe processing result.
+- ViT prediction reference, where inference was performed.
+
+Investigate the existing asynchronous ViT worker and queue.
+
+Ensure stale predictions are identified correctly.
+
+### Video statistics
+
+Persist:
+
+- Captured frames.
+- Displayed frames, for CLI sessions.
+- MediaPipe-processed frames.
+- Valid face frames.
+- ViT submitted frames.
+- ViT analyzed frames.
+- Dropped or skipped frames.
+- Processing errors.
+- MediaPipe latency.
+- ViT inference latency.
+- ViT queue delay.
+- Prediction freshness.
+
+### Existing 47-feature vector
+
+Preserve the existing 47-feature vector.
+
+Inspect the calculation and meaning of every feature.
+
+Verify:
+
+- Feature ordering.
+- Units.
+- Missing values.
+- Normalization.
+- Valid ranges.
+- Aggregation method.
+
+Do not silently change the feature schema.
+
+---
+
+# PART 4 — QUESTIONNAIRE MODULE
+
+Inspect and reuse the existing questionnaire.
+
+Implement the complete workflow:
+
+1. Retrieve questionnaire questions.
+2. Validate responses.
+3. Store responses.
+4. Execute the actual scoring algorithm.
+5. Calculate total score.
+6. Calculate maximum possible score.
+7. Apply documented scoring thresholds.
+8. Return the screening classification.
+9. Persist results.
+
+For a conventional weighted questionnaire, the general scoring structure is:
+
+\[
+S_Q=\sum_{i=1}^{n}w_i x_i
+\]
+
+For reverse-coded items on a scale from \(a\) to \(b\):
+
+\[
+x_i'=a+b-x_i
+\]
+
+For a normalized score, when appropriate:
+
+\[
+P_Q=\frac{S_Q}{S_{Q,\max}}\times100
+\]
+
+These are general formulas only. Implement the actual questionnaire's official scoring rules, including reverse-coded items, weights and missing-response handling.
+
+Do not invent the questionnaire cutoff.
+
+Record the questionnaire name, version, scoring method and threshold source.
+
+---
+
+# PART 5 — COMBINE QUESTIONNAIRE AND VIDEO FEATURES
+
+Implement a proper integration service:
+
+`IntegratedAssessmentService`
+
+This is the central component of MindBloom.
+
+It must retrieve:
+
+### Questionnaire features
+
+- Responses.
+- Raw score.
+- Normalized score, if applicable.
+- Screening classification.
+- Relevant questionnaire-derived features.
+
+### Video features
+
+- Existing 47-feature vector.
+- MediaPipe measurements.
+- ViT emotion probabilities.
+- Emotion aggregates.
+- Session statistics.
+
+Validate that both belong to the same assessment ID.
+
+Create a consistent combined feature representation.
+
+Do not concatenate incompatible features without checking their:
+
+- Definitions.
+- Units.
+- Scales.
+- Missing values.
+- Normalization.
+- Feature ordering.
+- Model input schema.
+
+The same combined feature schema must be used during model training and inference.
+
+Persist the combined feature representation.
+
+---
+
+# PART 6 — ASD SCORING FORMULA AND THRESHOLD
+
+I need an actual integrated scoring mechanism, not merely a report containing separate questionnaire and video results.
+
+Inspect the repository for:
+
+- Existing combined classifiers.
+- Training datasets.
+- Ground-truth participant labels.
+- Existing model artifacts.
+- Existing threshold configurations.
+- Training and validation scripts.
+
+### Case A: An existing suitable combined model is available
+
+Inspect its:
+
+- Training features.
+- Training dataset.
+- Target labels.
+- Preprocessing.
+- Architecture.
+- Calibration.
+- Validation metrics.
+- Decision threshold.
+
+Reuse it if appropriate.
+
+For a calibrated classifier:
+
+\[
+p=P(ASD\mid X_Q,X_V)
+\]
+
+where:
+
+- \(X_Q\) = questionnaire features.
+- \(X_V\) = video features.
+- \(p\) = calibrated model probability.
+
+Apply a validated threshold \(T\):
+
+\[
+Classification=
+\begin{cases}
+\text{Above screening threshold}, & p\geq T\\
+\text{Below screening threshold}, & p<T
+\end{cases}
+\]
+
+Return the actual probability, threshold, model version and classification.
+
+### Case B: No suitable combined model exists
+
+Inspect whether a participant-level labeled dataset is available.
+
+If sufficient valid data exists, implement a reproducible model-training pipeline.
+
+Compare suitable models:
+
+- Logistic Regression.
+- Random Forest.
+- XGBoost, if available and justified.
+
+Use questionnaire and video features together.
+
+Use participant-level splitting to prevent leakage.
+
+Evaluate:
+
+\[
+Accuracy=\frac{TP+TN}{TP+TN+FP+FN}
+\]
+
+\[
+Precision=\frac{TP}{TP+FP}
+\]
+
+\[
+Recall=\frac{TP}{TP+FN}
+\]
+
+\[
+Specificity=\frac{TN}{TN+FP}
+\]
+
+\[
+F1=2\frac{Precision\times Recall}{Precision+Recall}
+\]
+
+Also evaluate ROC-AUC, calibration, confusion matrix and sensitivity/specificity trade-offs.
+
+Select the decision threshold using validation data and document the selection method.
+
+Do not simply use 0.5 without justification.
+
+### Case C: No suitable labeled dataset exists
+
+Do not fabricate ASD labels or train on emotion predictions as substitutes for ASD diagnoses.
+
+Complete the entire feature integration and reporting pipeline.
+
+Clearly report that a validated combined ASD classifier is unavailable.
+
+Do not produce an invented ASD probability.
+
+**The goal is a mathematically defensible integrated screening result, not an arbitrary score that looks convincing.**
+
+---
+
+# PART 7 — VIDEO FEATURE STATISTICS AND EMOTION AGGREGATION
+
+Reuse existing feature calculations wherever available.
+
+Verify the following examples against the implementation.
+
+Mean:
+
+\[
+\mu=\frac{1}{N}\sum_{i=1}^{N}x_i
+\]
+
+Variance:
+
+\[
+\sigma^2=\frac{1}{N}\sum_{i=1}^{N}(x_i-\mu)^2
+\]
+
+Standard deviation:
+
+\[
+\sigma=\sqrt{\sigma^2}
+\]
+
+Blink rate:
+
+\[
+BlinkRate=\frac{N_{\text{blinks}}}{T_{\text{minutes}}}
+\]
+
+EAR:
+
+\[
+EAR=\frac{\|p_2-p_6\|+\|p_3-p_5\|}
+{2\|p_1-p_4\|}
+\]
+
+For ViT emotion probabilities:
+
+\[
+\bar p_j=\frac{1}{N}\sum_{i=1}^{N}p_{ij}
+\]
+
+Emotion distribution:
+
+\[
+D_j=\frac{N_j}{N}\times100
+\]
+
+Only successful ViT inferences may contribute to the emotion statistics.
+
+Do not interpret emotion probabilities as ASD probabilities.
+
+---
+
+# PART 8 — THRESHOLD ENGINE
+
+Implement a reusable threshold engine.
+
+It must support:
+
+- Questionnaire scoring thresholds.
+- Documented video feature reference ranges.
+- Combined classifier thresholds.
+- Threshold source and version.
+- Configurable comparison operators.
+- Missing measurements.
+- Invalid measurements.
+- Insufficient data.
+
+For a feature with documented reference interval \([L,U]\):
+
+\[
+R(x)=
+\begin{cases}
+\text{Within reference interval}, & L\leq x\leq U\\
+\text{Outside reference interval}, & \text{otherwise}
+\end{cases}
+\]
+
+Only apply clinically appropriate thresholds with documented sources and population applicability.
+
+Do not convert an individual feature outside its reference range directly into an ASD-positive classification.
+
+The integrated ASD screening classification must come from the validated combined decision method, where available.
+
+---
+
+# PART 9 — COMPLETE REST API
+
+Use the existing backend framework.
+
+All endpoints must invoke actual services and persist real data.
+
+### Assessment
+
+`POST /api/v1/assessments`
+
+Create an assessment.
+
+`GET /api/v1/assessments/{assessment_id}`
+
+Retrieve assessment status.
+
+### Questionnaire
+
+`GET /api/v1/assessments/{assessment_id}/questionnaire`
+
+Retrieve questions.
+
+`POST /api/v1/assessments/{assessment_id}/questionnaire`
+
+Submit responses and calculate the questionnaire result.
+
+`GET /api/v1/assessments/{assessment_id}/questionnaire/result`
+
+Retrieve questionnaire score and classification.
+
+### Video
+
+`POST /api/v1/assessments/{assessment_id}/video/start`
+
+Invoke:
+
+`CombinedVideoAssessmentService.run_and_persist()`
+
+Which invokes:
+
+`app.video.service.run_video_session()`
+
+Do not execute the CLI test harness through this endpoint.
+
+Reuse the shared video processing core.
+
+`GET /api/v1/assessments/{assessment_id}/video/status`
+
+Retrieve session status.
+
+`GET /api/v1/assessments/{assessment_id}/video/result`
+
+Retrieve MediaPipe results, ViT predictions, 47-feature vector and statistics.
+
+### Integration
+
+`POST /api/v1/assessments/{assessment_id}/integrate`
+
+Combine questionnaire and video features, execute the applicable model and threshold evaluation, and persist the integrated result.
+
+`GET /api/v1/assessments/{assessment_id}/integrated-result`
+
+Retrieve combined results.
+
+`GET /api/v1/assessments/{assessment_id}/report`
+
+Retrieve the complete assessment report.
+
+### One-shot workflow
+
+Provide one endpoint to initiate the complete assessment workflow if appropriate.
+
+It must create one assessment ID and coordinate questionnaire submission, video processing and integration without duplicating existing service logic.
+
+### API requirements
+
+- Proper request and response schemas.
+- Input validation.
+- Appropriate HTTP status codes.
+- Consistent error handling.
+- Assessment ID consistency.
+- Correct state management.
+- No fake success responses.
+- No placeholder JSON.
+- No hardcoded model predictions.
+- OpenAPI/Swagger documentation.
+
+Document that webcam access requires the backend process to run in an environment with access to the camera.
+
+---
+
+# PART 10 — SQLITE DATABASE
+
+Use SQLite exclusively.
+
+Implement persistent database models for:
+
+- Assessments.
+- Questionnaire responses.
+- Questionnaire results.
+- Video sessions.
+- MediaPipe measurements.
+- ViT predictions.
+- 47-feature vectors.
+- Combined feature representations.
+- Threshold configurations.
+- Model metadata and versions.
+- Integrated results.
+- Reports.
+
+Use proper primary keys, foreign keys, transactions, migrations and SQLite foreign-key enforcement.
+
+Back up existing data before migration.
+
+---
+
+# PART 11 — ASSESSMENT STATE MANAGEMENT
+
+Implement:
+
+CREATED → QUESTIONNAIRE_COMPLETED → VIDEO_PROCESSING → VIDEO_COMPLETED → INTEGRATION_PENDING → INTEGRATED → COMPLETED
+
+Also support FAILED and retry states.
+
+Prevent duplicate active video sessions.
+
+Ensure questionnaire and video results belong to the same assessment ID.
+
+Do not mark an assessment completed until its required results and report are persisted.
+
+---
+
+# PART 12 — COMPLETE INTEGRATED REPORT
+
+Generate one final report containing:
+
+### Assessment
+- Assessment ID.
+- Participant ID.
+- Timestamps.
+- Processing status.
+
+### Questionnaire
+- Responses.
+- Score.
+- Maximum score.
+- Scoring formula.
+- Applied cutoff.
+- Screening classification.
+
+### Video
+- MediaPipe measurements.
+- 47-feature vector.
+- ViT emotion probabilities.
+- Emotion distribution.
+- Frame and inference statistics.
+- Latency measurements.
+
+### Combined analysis
+- Combined feature representation.
+- Model name and version.
+- Predicted probability, if available.
+- Decision threshold.
+- Screening classification.
+- Model validation metrics.
+
+### Interpretation
+- Questionnaire findings.
+- Video findings.
+- Combined result.
+- Missing data.
+- Important limitations.
+
+Clearly distinguish screening from clinical diagnosis.
+
+---
+
+# PART 13 — MANDATORY TESTING
+
+Do not claim completion merely because the application starts.
+
+### A. Test the CLI
+
+Run:
+
+```powershell
+cd D:\MindBloom2\MindBloom
+python -m app.video.test_combined --duration 15 --sample-interval 5
+```
+
+Verify:
+
+- Exactly one combined window opens.
+- No DeepFace emotion window opens.
+- MediaPipe runs.
+- ViT runs.
+- The same shared processing core is used.
+- Emotion probabilities match the displayed emotion.
+- Frame counts and inference counts are correct.
+- The existing 47-feature vector is generated.
+
+### B. Test the API
+
+Start the backend and test:
+
+1. Create an assessment.
+2. Retrieve questionnaire questions.
+3. Submit responses.
+4. Verify questionnaire scoring.
+5. Verify questionnaire threshold.
+6. Start the API video service.
+7. Verify that `CombinedVideoAssessmentService.run_and_persist()` is executed.
+8. Verify that `app.video.service.run_video_session()` is executed.
+9. Run an actual webcam session.
+10. Verify MediaPipe and ViT outputs.
+11. Verify the 47-feature vector.
+12. Verify SQLite persistence.
+13. Generate the integrated assessment.
+14. Verify the combined scoring/model output, if available.
+15. Verify threshold evaluation.
+16. Retrieve the final report.
+17. Restart the backend.
+18. Verify that the same assessment and report remain available.
+
+Do not substitute mocks for real webcam and model execution.
+
+### C. Verify the two entry points
+
+Confirm that:
+
+- CLI and API use the same underlying video processing functions.
+- The API does not invoke `test_combined.py`.
+- Neither path creates an unintended DeepFace emotion detector.
+- The CLI opens only the intended combined visualization.
+- There is no duplicated model initialization or independent capture loop within one session.
+
+---
+
+# PART 14 — IMPLEMENTATION ORDER
+
+Follow this sequence:
+
+1. Explain the existing architecture with actual source references.
+2. Trace both video entry points.
+3. Identify the exact cause of the two observed windows.
+4. Fix unintended DeepFace execution and duplicate display orchestration.
+5. Preserve the shared MediaPipe + ViT processing core.
+6. Verify the existing 47-feature vector.
+7. Complete questionnaire scoring and thresholds.
+8. Implement SQLite persistence.
+9. Complete the API video service.
+10. Implement questionnaire/video feature integration.
+11. Implement or reuse an appropriate combined ML model.
+12. Implement the mathematical threshold engine.
+13. Complete the REST API.
+14. Implement the integrated report.
+15. Run CLI and API end-to-end tests.
+16. Fix failures and verify persistence.
+
+Do not stop after explaining the architecture. Implement the changes.
+
+---
+
+# PART 15 — FINAL DELIVERY
+
+Provide:
+
+1. Existing architecture explanation.
+2. Root cause of the duplicate windows.
+3. Files inspected.
+4. Files modified and created.
+5. Shared video-core architecture after changes.
+6. Confirmation that DeepFace is not an active second emotion detector.
+7. Questionnaire scoring formula and threshold source.
+8. Video feature formulas and definitions.
+9. Combined feature schema.
+10. Combined model details and training results, if applicable.
+11. Exact threshold and justification, if supported.
+12. All REST endpoints with example requests and responses.
+13. SQLite schema and migration details.
+14. Actual CLI execution results.
+15. Actual API end-to-end test results.
+16. Example integrated assessment report.
+17. Remaining limitations.
+
+## DEFINITION OF DONE
+
+MindBloom must have one complete integrated backend.
+
+A user must be able to:
+
+1. Create an assessment through the API.
+2. Complete the existing questionnaire.
+3. Run the existing combined MediaPipe + ViT video assessment.
+4. Use one webcam processing loop and one combined CLI display.
+5. Retrieve the actual video measurements and 47-feature vector through the API.
+6. Combine questionnaire and video features.
+7. Generate a defensible integrated screening result using a validated model and documented threshold, if the necessary training evidence exists.
+8. Retrieve the complete report through a REST endpoint.
+9. Restart the backend and retrieve the same persisted assessment.
+
+**Do not rebuild the video pipeline. Do not create another emotion detector. Do not force the API to execute the CLI harness. Fix the orchestration while preserving the shared processing core, and complete the entire questionnaire + video + scoring + threshold + reporting backend.**

@@ -199,6 +199,7 @@ class LandmarkFrameFeatures:
     face_detected: bool
 
     num_faces: int = 0
+    landmarks: Optional[np.ndarray] = None
 
     gaze_horizontal: Optional[float] = None
     gaze_vertical: Optional[float] = None
@@ -584,6 +585,7 @@ class MediaPipeProcessor:
                 return LandmarkFrameFeatures(
                     face_detected=False,
                     num_faces=0,
+                    error="no_face_detected",
                 )
 
             num_faces = len(faces)
@@ -708,6 +710,7 @@ class MediaPipeProcessor:
             return LandmarkFrameFeatures(
                 face_detected=True,
                 num_faces=num_faces,
+                landmarks=pts,
 
                 gaze_horizontal=gaze_h,
                 gaze_vertical=gaze_v,
@@ -929,6 +932,13 @@ class MediaPipeProcessor:
 
         Both are approximately in [0, 1].
         """
+        refine_landmarks = getattr(
+            self,
+            "refine_landmarks",
+            getattr(self, "_refine_landmarks", True),
+        )
+        if not refine_landmarks:
+            return None, None
 
         required = max(
             LEFT_IRIS_CENTER_IDX,
